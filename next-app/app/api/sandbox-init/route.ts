@@ -50,35 +50,53 @@ export async function POST() {
     } else {
       console.log('Datadog agent installed successfully');
       
-      // Start the Datadog agent using systemctl
-      console.log('Starting Datadog agent...');
-      const startAgent = await sandbox.runCommand({
-        cmd: 'sudo',
-        args: ['systemctl', 'start', 'datadog-agent'],
+      // Verify agent installation
+      console.log('Verifying Datadog agent installation...');
+      const checkInstall = await sandbox.runCommand({
+        cmd: 'ls',
+        args: ['-la', '/opt/datadog-agent/'],
         stderr: process.stderr,
         stdout: process.stdout,
       });
       
-      if (startAgent.exitCode !== 0) {
-        console.warn('Warning: Failed to start Datadog agent with systemctl');
-      }
-      
-      // Wait for agent to start
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Check agent status
-      console.log('Checking Datadog agent status...');
-      const statusAgent = await sandbox.runCommand({
-        cmd: 'sudo',
-        args: ['systemctl', 'status', 'datadog-agent'],
-        stderr: process.stderr,
-        stdout: process.stdout,
-      });
-      
-      if (statusAgent.exitCode === 0) {
-        console.log('Datadog agent is running');
+      if (checkInstall.exitCode === 0) {
+        console.log('Datadog agent files found in /opt/datadog-agent/');
+        
+        // Manually start the agent using the binary directly
+        console.log('Starting Datadog agent manually...');
+        const startAgent = await sandbox.runCommand({
+          cmd: 'sudo',
+          args: ['/opt/datadog-agent/bin/agent/agent', 'start'],
+          stderr: process.stderr,
+          stdout: process.stdout,
+          detached: true,
+        });
+        
+        if (startAgent.exitCode !== 0) {
+          console.warn('Warning: Failed to start Datadog agent manually');
+        } else {
+          console.log('Datadog agent start command executed');
+        }
+        
+        // Wait for agent to start
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Check agent status
+        console.log('Checking Datadog agent status...');
+        const statusAgent = await sandbox.runCommand({
+          cmd: 'sudo',
+          args: ['/opt/datadog-agent/bin/agent/agent', 'status'],
+          stderr: process.stderr,
+          stdout: process.stdout,
+        });
+        
+        if (statusAgent.exitCode === 0) {
+          console.log('Datadog agent status check completed successfully');
+        } else {
+          console.warn('Datadog agent status check returned non-zero exit code');
+        }
       } else {
-        console.warn('Datadog agent status check failed');
+        console.warn('Datadog agent installation directory not found');
       }
     }
 
