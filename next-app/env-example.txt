@@ -6,5 +6,10 @@ FLASK_API_GITHUB_REPO=https://github.com/your-username/your-flask-api-repo.git
 # Get this from your Datadog account settings
 DD_API_KEY=your-datadog-api-key-here
 
+# Optional: Skip Datadog agent installation in sandbox
+# Set to 'true' if the agent fails to start in the sandbox environment
+# The Flask app will still run with ddtrace but won't send traces to the agent
+# SKIP_DD_AGENT_INSTALL=true
+
 # Vercel OIDC token will be automatically populated when you run 'vercel env pull'
 # This is needed for Vercel Sandbox authentication
