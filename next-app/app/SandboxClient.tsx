@@ -3,14 +3,18 @@
 import { useState } from 'react';
 
 export default function SandboxClient() {
-  const [isLoading, setIsLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
+  const [isFetchingData, setIsFetchingData] = useState(false);
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
   const [apiData, setApiData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [callCount, setCallCount] = useState(0);
 
   const handleSpinUpVM = async () => {
-    setIsLoading(true);
+    setIsInitializing(true);
     setError(null);
+    setApiData(null);
+    setCallCount(0);
     
     try {
       // Call /api/sandbox-init to spin up the sandbox
@@ -24,14 +28,27 @@ export default function SandboxClient() {
       
       const { url } = await sandboxResponse.json();
       setSandboxUrl(url);
-      
-      // Now call /api/call with the sandbox URL
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setIsInitializing(false);
+    }
+  };
+
+  const handleCallAPI = async () => {
+    if (!sandboxUrl) return;
+    
+    setIsFetchingData(true);
+    setError(null);
+    
+    try {
+      // Call /api/call with the sandbox URL
       const dataResponse = await fetch('/api/call', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ sandboxUrl: url }),
+        body: JSON.stringify({ sandboxUrl }),
       });
       
       if (!dataResponse.ok) {
@@ -40,10 +57,11 @@ export default function SandboxClient() {
       
       const data = await dataResponse.json();
       setApiData(data);
+      setCallCount(prev => prev + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
-      setIsLoading(false);
+      setIsFetchingData(false);
     }
   };
 
@@ -53,21 +71,38 @@ export default function SandboxClient() {
       
       <button
         onClick={handleSpinUpVM}
-        disabled={isLoading}
+        disabled={isInitializing || !!sandboxUrl}
         className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {isLoading ? 'Spinning up VM...' : 'Spin up VM'}
+        {isInitializing ? 'Initializing Sandbox...' : sandboxUrl ? 'Sandbox Running' : 'Initialize Sandbox'}
       </button>
       
-      {error && (
-        <div className="mt-4 p-4 bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-100 rounded">
-          Error: {error}
-        </div>
+      {sandboxUrl && (
+        <>
+          <div className="mt-4 p-4 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-100 rounded w-full">
+            <p className="text-sm mb-2">✅ Sandbox is running!</p>
+            <p className="text-xs">Flask API URL: <code className="font-mono">{sandboxUrl}</code></p>
+          </div>
+          
+          <button
+            onClick={handleCallAPI}
+            disabled={isFetchingData}
+            className="rounded-full border border-solid border-black dark:border-white transition-colors flex items-center justify-center hover:bg-gray-100 dark:hover:bg-gray-800 font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isFetchingData ? 'Calling API...' : 'Call Flask API'}
+          </button>
+          
+          {callCount > 0 && (
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              API called {callCount} time{callCount !== 1 ? 's' : ''}
+            </p>
+          )}
+        </>
       )}
       
-      {sandboxUrl && (
-        <div className="mt-4 p-4 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-100 rounded">
-          Sandbox URL: <code className="font-mono">{sandboxUrl}</code>
+      {error && (
+        <div className="mt-4 p-4 bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-100 rounded w-full">
+          Error: {error}
         </div>
       )}
       
