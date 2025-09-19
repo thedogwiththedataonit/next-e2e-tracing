@@ -39,7 +39,7 @@ export async function POST() {
     // Install Datadog agent with environment variables
     const datadogInstall = await sandbox.runCommand({
       cmd: 'bash',
-      args: ['-c', `DD_API_KEY=${ddApiKey} DD_SITE="datadoghq.com" DD_APM_INSTRUMENTATION_ENABLED=host DD_APM_INSTRUMENTATION_LIBRARIES=python:3,js:5 DD_PROFILING_ENABLED=auto DD_ENV=dev bash -c "$(curl -L https://install.datadoghq.com/scripts/install_script_agent7.sh)"`],
+      args: ['-c', `DD_API_KEY=${ddApiKey} DD_SITE="datadoghq.com" DD_APM_ENABLED=true DD_ENV=dev bash -c "$(curl -L https://install.datadoghq.com/scripts/install_script_agent7.sh)"`],
       stderr: process.stderr,
       stdout: process.stdout,
       sudo: true,
@@ -72,9 +72,10 @@ export async function POST() {
     console.log('Dependencies installed, starting Flask server with Datadog APM...');
 
     // Export Datadog environment variables for the Flask app
+    // Note: We set DD_TRACE_LOG_STREAM_HANDLER=false to avoid ddtrace logging errors
     await sandbox.runCommand({
       cmd: 'bash',
-      args: ['-c', `export DD_API_KEY=${ddApiKey} && export DD_SITE="datadoghq.com" && export DD_ENV=dev && export DD_SERVICE=flask-api && export DD_VERSION=1.0.0 && export DD_TRACE_PROPAGATION_STYLE=tracecontext && ddtrace-run python /vercel/sandbox/flask-api/app.py`],
+      args: ['-c', `export DD_API_KEY=${ddApiKey} && export DD_SITE="datadoghq.com" && export DD_ENV=dev && export DD_SERVICE=flask-api && export DD_VERSION=1.0.0 && export DD_TRACE_PROPAGATION_STYLE=tracecontext && export DD_TRACE_LOG_STREAM_HANDLER=false && python /vercel/sandbox/flask-api/app.py`],
       stderr: process.stderr,
       stdout: process.stdout,
       detached: true,

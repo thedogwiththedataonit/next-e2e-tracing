@@ -1,6 +1,30 @@
 from flask import Flask, jsonify
+from flask_cors import CORS
+import os
 
 app = Flask(__name__)
+# Enable CORS for all routes
+CORS(app)
+
+# Configure ddtrace to not fail if agent is not available
+if os.getenv('DD_TRACE_ENABLED', 'true').lower() == 'true':
+    try:
+        from ddtrace import patch_all
+        patch_all()
+    except Exception as e:
+        print(f"Warning: Failed to initialize ddtrace: {e}")
+
+@app.route('/')
+def home():
+    """Root endpoint"""
+    return jsonify({
+        'message': 'Flask API is running!',
+        'endpoints': {
+            '/': 'This endpoint',
+            '/health': 'Health check',
+            '/api/data': 'Get sample data'
+        }
+    }), 200
 
 @app.route('/health')
 def health():
