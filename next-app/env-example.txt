@@ -1,0 +1,10 @@
+# Flask API GitHub repository URL
+# Replace this with your actual Flask API repository URL
+FLASK_API_GITHUB_REPO=https://github.com/your-username/your-flask-api-repo.git
+
+# Datadog API Key
+# Get this from your Datadog account settings
+DD_API_KEY=your-datadog-api-key-here
+
+# Vercel OIDC token will be automatically populated when you run 'vercel env pull'
+# This is needed for Vercel Sandbox authentication
