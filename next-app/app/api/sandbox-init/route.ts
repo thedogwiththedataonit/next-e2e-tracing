@@ -79,41 +79,58 @@ export async function POST() {
           stdout: process.stdout,
         });
         
-        // Try running the agent with run command instead of start
-        const runAgent = await sandbox.runCommand({
-          cmd: 'bash',
-          args: ['-c', 'sudo /opt/datadog-agent/bin/agent/agent run > /tmp/datadog-agent.log 2>&1 &'],
+        // Check if agent configuration exists
+        await sandbox.runCommand({
+          cmd: 'ls',
+          args: ['-la', '/etc/datadog-agent/datadog.yaml'],
           stderr: process.stderr,
           stdout: process.stdout,
         });
         
-        console.log('Datadog agent run command executed in background');
+        // Start the agent using the correct executable path
+        const startAgent = await sandbox.runCommand({
+          cmd: 'sudo',
+          args: ['/opt/datadog-agent/bin/agent', 'start'],
+          stderr: process.stderr,
+          stdout: process.stdout,
+        });
+        
+        if (startAgent.exitCode !== 0) {
+          console.warn('Warning: Failed to start Datadog agent');
+        } else {
+          console.log('Datadog agent start command executed successfully');
+        }
         
         // Wait for agent to initialize
         await new Promise(resolve => setTimeout(resolve, 5000));
         
-        // Check if agent process is running
-        console.log('Checking if Datadog agent process is running...');
-        const checkProcess = await sandbox.runCommand({
-          cmd: 'bash',
-          args: ['-c', 'ps aux | grep -v grep | grep datadog-agent'],
+        // Check agent status using the status command
+        console.log('Checking Datadog agent status...');
+        const statusAgent = await sandbox.runCommand({
+          cmd: 'sudo',
+          args: ['/opt/datadog-agent/bin/agent', 'status'],
           stderr: process.stderr,
           stdout: process.stdout,
         });
         
-        if (checkProcess.exitCode === 0) {
-          console.log('Datadog agent process is running');
+        if (statusAgent.exitCode === 0) {
+          console.log('Datadog agent is running and reporting status');
         } else {
-          console.warn('Datadog agent process not found');
+          console.warn('Datadog agent status check failed');
           
-          // Check the log file for errors
-          console.log('Checking agent log for errors...');
-          await sandbox.runCommand({
-            cmd: 'tail',
-            args: ['-n', '20', '/tmp/datadog-agent.log'],
+          // Also check if process is running
+          const checkProcess = await sandbox.runCommand({
+            cmd: 'bash',
+            args: ['-c', 'ps aux | grep -v grep | grep datadog-agent'],
             stderr: process.stderr,
             stdout: process.stdout,
           });
+          
+          if (checkProcess.exitCode === 0) {
+            console.log('Datadog agent process found in process list');
+          } else {
+            console.warn('Datadog agent process not found');
+          }
         }
       } else {
         console.warn('Datadog agent installation directory not found');
