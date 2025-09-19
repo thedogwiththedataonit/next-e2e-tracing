@@ -49,6 +49,37 @@ export async function POST() {
       console.warn('Warning: Datadog agent installation failed, continuing anyway...');
     } else {
       console.log('Datadog agent installed successfully');
+      
+      // Start the Datadog agent using systemctl
+      console.log('Starting Datadog agent...');
+      const startAgent = await sandbox.runCommand({
+        cmd: 'sudo',
+        args: ['systemctl', 'start', 'datadog-agent'],
+        stderr: process.stderr,
+        stdout: process.stdout,
+      });
+      
+      if (startAgent.exitCode !== 0) {
+        console.warn('Warning: Failed to start Datadog agent with systemctl');
+      }
+      
+      // Wait for agent to start
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Check agent status
+      console.log('Checking Datadog agent status...');
+      const statusAgent = await sandbox.runCommand({
+        cmd: 'sudo',
+        args: ['systemctl', 'status', 'datadog-agent'],
+        stderr: process.stderr,
+        stdout: process.stdout,
+      });
+      
+      if (statusAgent.exitCode === 0) {
+        console.log('Datadog agent is running');
+      } else {
+        console.warn('Datadog agent status check failed');
+      }
     }
 
     console.log('Installing Python dependencies...');
@@ -72,10 +103,10 @@ export async function POST() {
     console.log('Dependencies installed, starting Flask server with Datadog APM...');
 
     // Export Datadog environment variables for the Flask app
-    // Note: We set DD_TRACE_LOG_STREAM_HANDLER=false to avoid ddtrace logging errors
+    // Using ddtrace-run to properly instrument the Flask app
     await sandbox.runCommand({
       cmd: 'bash',
-      args: ['-c', `export DD_API_KEY=${ddApiKey} && export DD_SITE="datadoghq.com" && export DD_ENV=dev && export DD_SERVICE=flask-api && export DD_VERSION=1.0.0 && export DD_TRACE_PROPAGATION_STYLE=tracecontext && export DD_TRACE_LOG_STREAM_HANDLER=false && python /vercel/sandbox/flask-api/app.py`],
+      args: ['-c', `export DD_API_KEY=${ddApiKey} && export DD_SITE="datadoghq.com" && export DD_ENV=dev && export DD_SERVICE=flask-api && export DD_VERSION=1.0.0 && export DD_TRACE_PROPAGATION_STYLE=tracecontext && export DD_TRACE_AGENT_URL=http://localhost:8126 && export DD_TRACE_LOG_STREAM_HANDLER=false && ddtrace-run python /vercel/sandbox/flask-api/app.py`],
       stderr: process.stderr,
       stdout: process.stdout,
       detached: true,
