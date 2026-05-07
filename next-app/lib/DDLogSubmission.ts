@@ -28,7 +28,7 @@ export interface LogEntry {
   [key: string]: unknown;
 }
 
-const DEFAULT_SERVICE = "next-app";
+const DEFAULT_SERVICE = "next-e2e-tracing";
 
 let logsApi: v2.LogsApi | null = null;
 
