@@ -1,27 +1,64 @@
-# --- Vercel Sandbox -----------------------------------------------------------
+# =============================================================================
+# next-app — environment variables
+# =============================================================================
+# Copy to `.env.local` for local dev, or configure each variable in the
+# Next.js Vercel project's Environment Variables UI for preview/prod.
+#
+# The Flask API runs as a SEPARATE Vercel project — see the
+# "flask-api project" section at the bottom for the env vars to configure
+# on that project's side.
 
-# Flask API GitHub repository URL (cloned into the sandbox on init)
-FLASK_API_GITHUB_REPO=https://github.com/your-username/your-flask-api-repo.git
-
-# Vercel OIDC token will be automatically populated when you run 'vercel env pull'.
-# Required for `@vercel/sandbox` authentication.
-# VERCEL_OIDC_TOKEN=<auto-populated>
+# --- Flask API connection -----------------------------------------------------
+# URL of the deployed Flask API (no trailing slash). The server-side
+# /api/call route uses this to proxy requests. `@vercel/otel` automatically
+# injects a W3C `traceparent` on this fetch, which the Flask side accepts via
+# DD_TRACE_PROPAGATION_STYLE=tracecontext (see flask-api section below).
+FLASK_API_URL=https://your-flask-api.vercel.app
 
 # --- Datadog: server (Node.js) ------------------------------------------------
-
-# Datadog API key — used by `lib/DDLogSubmission.ts` to ship structured server
-# logs and by /api/sandbox-init to install/configure the Datadog agent inside
-# the Vercel Sandbox so Flask APM traces flow into Datadog. Server-only.
+# Datadog API key — used by `lib/DDLogSubmission.ts` to ship structured
+# server logs to the Datadog Logs API. Server-only — never expose as
+# NEXT_PUBLIC_*.
 DD_API_KEY=your-datadog-api-key-here
 
-# Optional. Defaults to "datadoghq.com" if unset.
+# Optional. Defaults to "datadoghq.com".
 # DATADOG_SITE=datadoghq.com
 
 # --- Datadog: browser RUM -----------------------------------------------------
 # These four are inlined into the client bundle. Never put a secret in
-# NEXT_PUBLIC_* — only the public RUM application id and client token belong here.
-
+# NEXT_PUBLIC_* — only the public RUM application id and client token belong
+# here.
 NEXT_PUBLIC_DATADOG_APPLICATION_ID=your-rum-application-id
 NEXT_PUBLIC_DATADOG_CLIENT_TOKEN=your-rum-client-token
 NEXT_PUBLIC_DATADOG_SERVICE_NAME=next-app
 NEXT_PUBLIC_DATADOG_ENV=dev
+
+# Optional, comma-separated list of additional origins (or URL prefixes) that
+# the browser RUM SDK should inject the W3C `traceparent` header onto. The
+# Next.js same-origin (window.location.origin) is always included by default.
+#
+# Set this if you want browser code to ever call the Flask API directly and
+# have those XHRs link into the Flask APM trace (the proxy-via-/api/call
+# pattern in this repo does NOT need it).
+# NEXT_PUBLIC_DATADOG_ALLOWED_TRACING_URLS=https://your-flask-api.vercel.app
+
+
+# =============================================================================
+# flask-api project — environment variables (FYI, set on the OTHER Vercel project)
+# =============================================================================
+# These are NOT consumed by next-app; they are the env vars you should
+# configure on the flask-api Vercel project so that end-to-end tracing works.
+#
+# DD_API_KEY=<same Datadog API key>
+# DD_SITE=datadoghq.com
+# DD_ENV=prod                 # or `preview` / `dev`
+# DD_SERVICE=flask-api
+# DD_VERSION=$VERCEL_GIT_COMMIT_SHA
+# DD_TRACE_ENABLED=true
+# DD_TRACE_PROPAGATION_STYLE=tracecontext   # CRITICAL — accepts traceparent
+# DD_TRACE_OTEL_ENABLED=true                # if Flask emits OTel spans
+#
+# CORS: the Flask app must allow the Next.js project's origin if any browser
+# code is going to call it directly. The proxy-via-/api/call pattern doesn't
+# need this, but if you do hit Flask from the browser:
+# ALLOWED_ORIGIN=https://your-next-app.vercel.app

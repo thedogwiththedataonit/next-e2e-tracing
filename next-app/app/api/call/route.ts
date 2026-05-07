@@ -1,26 +1,33 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 
 import { logError, submitLog } from '@/lib/DDLogSubmission';
 
-export async function POST(request: NextRequest) {
+/**
+ * Server-to-server call into the Flask API project.
+ *
+ * `FLASK_API_URL` is the production Flask deployment (set per-environment in
+ * the Next.js Vercel project's env vars). `@vercel/otel` auto-instruments
+ * `fetch`, so this call automatically gets a child span and propagates the
+ * W3C `traceparent` header — the Flask side picks it up via
+ * `DD_TRACE_PROPAGATION_STYLE=tracecontext`, joining both services into a
+ * single Datadog APM trace that links back to the originating RUM session.
+ */
+export async function POST() {
   const startedAt = Date.now();
-  let sandboxUrl: string | undefined;
+  const flaskApiUrl = process.env.FLASK_API_URL?.replace(/\/$/, '');
+
+  if (!flaskApiUrl) {
+    return NextResponse.json(
+      {
+        error:
+          'FLASK_API_URL is not set. Configure it in the Next.js Vercel project (or .env.local) to point at the deployed Flask API.',
+      },
+      { status: 500 },
+    );
+  }
 
   try {
-    const body = (await request.json()) as { sandboxUrl?: string };
-    sandboxUrl = body.sandboxUrl;
-
-    if (!sandboxUrl) {
-      return NextResponse.json(
-        { error: 'sandboxUrl is required' },
-        { status: 400 }
-      );
-    }
-
-    // `@vercel/otel` auto-instruments fetch — this call automatically
-    // gets a child span and propagates the W3C `traceparent` header,
-    // which the Flask sandbox accepts via DD_TRACE_PROPAGATION_STYLE=tracecontext.
-    const response = await fetch(`${sandboxUrl}/api/data`, {
+    const response = await fetch(`${flaskApiUrl}/api/data`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -29,37 +36,40 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       void logError(
-        'sandbox_call_upstream_error',
+        'flask_api_upstream_error',
         new Error(`Upstream returned ${response.status}`),
         {
-          sandbox_url: sandboxUrl,
+          flask_api_url: flaskApiUrl,
           upstream_status: response.status,
           duration_ms: Date.now() - startedAt,
         },
       );
-      throw new Error(`Failed to fetch from sandbox: ${response.statusText}`);
+      return NextResponse.json(
+        { error: `Flask upstream returned ${response.status}` },
+        { status: 502 },
+      );
     }
 
     const data = await response.json();
 
     void submitLog({
-      message: 'sandbox_call',
+      message: 'flask_api_call',
       level: 'info',
-      sandbox_url: sandboxUrl,
+      flask_api_url: flaskApiUrl,
       upstream_status: response.status,
       duration_ms: Date.now() - startedAt,
     });
 
     return NextResponse.json(data);
   } catch (error) {
-    console.error('Error calling sandbox API:', error);
-    void logError('sandbox_call_failed', error, {
-      sandbox_url: sandboxUrl,
+    console.error('Error calling Flask API:', error);
+    void logError('flask_api_call_failed', error, {
+      flask_api_url: flaskApiUrl,
       duration_ms: Date.now() - startedAt,
     });
     return NextResponse.json(
-      { error: 'Failed to fetch data from sandbox' },
-      { status: 500 }
+      { error: 'Failed to fetch data from Flask API' },
+      { status: 500 },
     );
   }
 }

@@ -11,11 +11,54 @@
  * - All public APIs are async + fire-and-forget.
  */
 
-import type { User } from "@datadog/browser-rum";
+import type { MatchOption, User } from "@datadog/browser-rum";
+
+type AllowedTracingUrl = {
+  match: MatchOption;
+  propagatorTypes: ("tracecontext" | "datadog" | "b3" | "b3multi")[];
+};
 
 let isInitialized = false;
 let initializationPromise: Promise<void> | null = null;
 let initializationAttempted = false;
+
+/**
+ * Build the RUM `allowedTracingUrls` list.
+ *
+ * - Always includes a same-origin matcher so browser → Next.js API calls get
+ *   a `traceparent` injected (works on localhost, Vercel preview URLs, and
+ *   prod without per-env config).
+ * - Additional cross-origin tracing targets — most importantly the deployed
+ *   Flask API origin — can be added by setting
+ *   `NEXT_PUBLIC_DATADOG_ALLOWED_TRACING_URLS` to a comma-separated list of
+ *   origins or URL prefixes (e.g.
+ *   `https://flask-api.vercel.app,https://api.example.com`). Each entry is
+ *   matched as a prefix against outbound URLs.
+ *
+ * Never use `*` here — that leaks trace IDs to third-party domains.
+ */
+function buildAllowedTracingUrls(): AllowedTracingUrl[] {
+  const urls: AllowedTracingUrl[] = [
+    {
+      match: (url: string) => url.startsWith(window.location.origin),
+      propagatorTypes: ["tracecontext"],
+    },
+  ];
+
+  const extra = process.env.NEXT_PUBLIC_DATADOG_ALLOWED_TRACING_URLS;
+  if (extra) {
+    for (const raw of extra.split(",")) {
+      const prefix = raw.trim().replace(/\/$/, "");
+      if (!prefix) continue;
+      urls.push({
+        match: (url: string) => url.startsWith(prefix),
+        propagatorTypes: ["tracecontext"],
+      });
+    }
+  }
+
+  return urls;
+}
 
 async function initializeDatadog(): Promise<void> {
   if (isInitialized) {
@@ -75,15 +118,7 @@ async function initializeDatadog(): Promise<void> {
         // for anything handling form data; switch to "allow" only if you
         // explicitly need to capture input contents in session replays.
         defaultPrivacyLevel: "mask-user-input",
-        // Inject W3C `traceparent` only on same-origin fetches. This covers
-        // localhost, Vercel preview URLs, and prod with no per-env config,
-        // and avoids leaking trace IDs to third parties.
-        allowedTracingUrls: [
-          {
-            match: (url: string) => url.startsWith(window.location.origin),
-            propagatorTypes: ["tracecontext"],
-          },
-        ],
+        allowedTracingUrls: buildAllowedTracingUrls(),
       });
 
       isInitialized = true;
