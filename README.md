@@ -2,7 +2,7 @@
 
 > Battle-tested patterns extracted from the Brew codebase (Next.js 16 App Router + Vercel + Convex + Clerk) for instrumenting **Real User Monitoring (RUM)**, **server-side OpenTelemetry tracing**, and **structured log shipping** to Datadog.
 >
-> This guide is **framework-portable** — every pattern works in any Next.js 14+ App Router app on Vercel. Section 9 ("Lift-and-shift checklist") is the TL;DR for porting it to a new project.
+> This guide is **framework-portable** — every pattern works in any Next.js 14+ App Router app on Vercel. Section 10 ("Lift-and-shift checklist") is the TL;DR for porting it to a new project.
 
 ---
 
@@ -343,7 +343,7 @@ const final = tracker.complete();
 const metrics = await logTelemetry(final); // returns Datadog-shaped metrics
 ```
 
-For the **streaming** path (`app/api/chat/route.ts`) we can't iterate `result.steps` — instead a `TransformStream` wraps the SSE response and parses `tool-input-available` / `tool-output-available` events as they fly past. See lines `~1500-1680` of `app/api/chat/route.ts` for the full pattern, and Section 8 below for guidance on whether you actually need this.
+For the **streaming** path (`app/api/chat/route.ts`) we can't iterate `result.steps` — instead a `TransformStream` wraps the SSE response and parses `tool-input-available` / `tool-output-available` events as they fly past. See lines `~1500-1680` of `app/api/chat/route.ts` for the full pattern, and Section 9 below for guidance on whether you actually need this.
 
 ### 5.2 Aggregation
 
@@ -609,7 +609,156 @@ For product analytics-style events ("user clicked Add Group"):
 
 ---
 
-## 7. End-to-end request example
+## 7. How a RUM trace flows: collection → traceparent → Vercel → Datadog
+
+The previous section showed *how to configure* RUM. This section explains the **data path** — what actually happens between a user clicking a button and a complete distributed trace appearing in Datadog. Understanding the four hops below is what lets you debug "why isn't my trace joined?" issues.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ① Browser                                                                  │
+│  ┌──────────────────┐    ┌─────────────────────────────────────┐            │
+│  │ User clicks      │───▶│ datadog-rum SDK                     │            │
+│  │ button           │    │  • generates trace_id + span_id     │            │
+│  └──────────────────┘    │  • buffers RUM resource event       │            │
+│         │                │  • patches global fetch / XHR       │            │
+│         ▼                └─────────────────────────────────────┘            │
+│  fetch('/api/call')                       │                                 │
+│         │                                 │                                 │
+│         │ ② traceparent: 00-<trace-id>-<span-id>-01                         │
+│         ▼                                 │                                 │
+└─────────│─────────────────────────────────┼─────────────────────────────────┘
+          │                                 │
+          │  HTTP request                   │  Periodic batch (every ~30s
+          │                                 │  / on visibilitychange)
+          ▼                                 ▼
+┌─────────│─────────────────────────────────┼─────────────────────────────────┐
+│  ③ Vercel Function           ④ ┌─────────▼────────────┐                     │
+│  ┌──────────────────┐           │ browser-intake-      │                     │
+│  │ instrumentation  │           │ datadoghq.com        │                     │
+│  │ .ts → @vercel/   │           │ (RUM intake)         │                     │
+│  │ otel auto-       │           └──────────────────────┘                     │
+│  │ instruments http │                     │                                 │
+│  └──────────────────┘                     │                                 │
+│         │ reads traceparent → creates     │                                 │
+│         │ server span (child of RUM span) │                                 │
+│         ▼                                 │                                 │
+│  ┌──────────────────┐                     │                                 │
+│  │ /api/call        │                     │                                 │
+│  │ fetch(FLASK_URL) │── traceparent ──┐   │                                 │
+│  └──────────────────┘                 │   │                                 │
+│         │                             │   │                                 │
+│         │ ⑤ Vercel observability      │   │                                 │
+│         │   bridge (OTLP → Datadog    │   │                                 │
+│         │   APM via Datadog-Vercel    │   │                                 │
+│         │   integration)              │   │                                 │
+│         ▼                             ▼   ▼                                 │
+└─────────│─────────────────────────────│───│─────────────────────────────────┘
+          │                             │   │
+          ▼                             ▼   ▼
+       ┌───────────────────────────────────────────┐
+       │  Datadog                                  │
+       │   APM (server spans) ◀── joined by ──▶ RUM│
+       │              trace_id (W3C tracecontext)  │
+       └───────────────────────────────────────────┘
+```
+
+### 7.1 Hop ①: How RUM collects the span in the browser
+
+When `datadogRum.init()` runs (from `instrumentation-client.ts`), the SDK wires up three things you need to understand for tracing:
+
+1. **A monkey-patch on `window.fetch` and `XMLHttpRequest`.** Every outbound request goes through the SDK first.
+2. **A `MatchOption` evaluator over `allowedTracingUrls`.** For each outbound URL, the SDK decides whether this request is traceable. If yes, it generates a fresh `trace_id` (16 bytes) and `span_id` (8 bytes) — these are *invented client-side*, not received from a server.
+3. **A buffered event queue.** Whatever happens — view changes, clicks (actions), fetches/XHRs (resources), errors, long tasks — gets pushed into an in-memory queue.
+
+The "RUM span" for a network call is really a **resource event** with these fields:
+
+| Field | Source |
+|---|---|
+| `@resource.url` | the fetch URL |
+| `@resource.duration` | measured by `performance.getEntriesByType('resource')` |
+| `@_dd.trace_id` | the trace_id the SDK generated |
+| `@_dd.span_id` | the span_id the SDK generated |
+| `@_dd.rule_psr` | the RUM trace sampling decision (sampled-or-not) |
+
+Resource events do **not** ship immediately — they're batched. A flush happens every ~30 seconds, on `visibilitychange`, on `pagehide`, and on the first request after init. Flushes go straight to `https://browser-intake-datadoghq.com/api/v2/rum?ddsource=browser&...` (or your site's intake host). **This pipeline is direct browser → Datadog and never touches Vercel.**
+
+### 7.2 Hop ②: The W3C `traceparent` header
+
+Right before the wrapped `fetch` actually sends the request, the SDK injects this header:
+
+```
+traceparent: 00-<trace-id>-<span-id>-01
+             │   │            │           │
+             │   │            │           └── trace flags ("01" = sampled)
+             │   │            └── parent span_id (8 bytes hex = 16 chars)
+             │   └── trace_id (16 bytes hex = 32 chars)
+             └── version ("00")
+```
+
+That's the [W3C Trace Context](https://www.w3.org/TR/trace-context/) format. It's the lingua franca that lets Datadog APM, OpenTelemetry collectors, AWS X-Ray, GCP Cloud Trace, and dozens of other vendors all interoperate.
+
+Three configuration choices in `instrumentation-client.ts` control whether/how this happens:
+
+```text
+allowedTracingUrls: [
+  { match: <predicate>, propagatorTypes: ["tracecontext"] }
+]
+```
+
+- **`match`** decides which URLs get the header. Same-origin is always safe; adding cross-origin URLs leaks your trace IDs to those domains, so be deliberate. Setting `*` is forbidden — see the warning in §6.2.
+- **`propagatorTypes`** picks the wire format. `"tracecontext"` is the W3C standard and what `@vercel/otel` (and Datadog APM v8+) read by default. Other valid values: `"datadog"` (legacy `x-datadog-trace-id` headers — still emitted by older `dd-trace`), `"b3"` / `"b3multi"` (Zipkin lineage). You can set multiple if you're transitioning.
+- **`traceContextInjection: "sampled"`** (the default) means the header is only injected if RUM decided to sample this trace. Set to `"all"` if you want backend services to make their own sampling decisions independently.
+
+### 7.3 Hop ③: Vercel function picks up `traceparent` via `@vercel/otel`
+
+The HTTP request arrives at the Vercel function. Two things have already happened by the time your route handler runs:
+
+1. **`instrumentation.ts` ran on cold start.** `registerOTel({ serviceName: "next-app" })` registered a global `NodeSDK` and bootstrapped these auto-instrumentations:
+   - `@opentelemetry/instrumentation-http` — wraps the inbound HTTP server so every incoming request becomes a server span.
+   - `@opentelemetry/instrumentation-undici` (Node 18+'s `fetch`) — wraps outbound fetches.
+2. **The HTTP instrumentation read the `traceparent` header** off the inbound request and *did the most important thing in this whole pipeline*: it called `propagation.extract()` to parse the header, then created the inbound server span as a **child** of the parent span ID it found there. The new server span re-uses the **same `trace_id`** as the RUM resource event upstream.
+
+That parent-child link is the entire reason you can click an XHR in a RUM session and jump into the matching APM trace — both events carry the same `trace_id`.
+
+When the route handler then calls `fetch(FLASK_API_URL + "/api/data")`, the outbound fetch instrumentation does the symmetric thing: takes the active span context, serializes it into a *new* `traceparent` header (`00-<same-trace-id>-<new-span-id>-01`), and stamps it on the outgoing request. That's how the trace continues into the Flask sandbox — Flask's `ddtrace` reads the header thanks to `DD_TRACE_PROPAGATION_STYLE=tracecontext`, creates its own span as a child of the Next.js span, and reports it to Datadog APM.
+
+### 7.4 Hop ④/⑤: Two parallel pipelines into Datadog
+
+There are **two completely independent transport paths** from your infrastructure to Datadog. They never converge in transit — they only meet in Datadog's storage layer where Datadog joins them by `trace_id`.
+
+**Pipeline A: RUM events → Datadog RUM (direct)**
+
+- Source: the buffered event queue inside the browser SDK.
+- Wire: `POST https://browser-intake-datadoghq.com/api/v2/rum?...` carrying gzipped batches of session/view/action/resource/error events.
+- Auth: the public **client token** in the request body.
+- Vercel involvement: **none**. The browser hits Datadog's intake hosts directly; you can't even disable this from Vercel's side. (This is why `clientToken` is a "public" credential — it's literally inlined into every page's JS.)
+
+**Pipeline B: OTel server spans → Datadog APM (via Vercel)**
+
+- Source: `@vercel/otel`'s in-process `BatchSpanProcessor`.
+- Wire: spans are exported as OTLP over HTTP to whatever `OTEL_EXPORTER_OTLP_ENDPOINT` is set to. **On Vercel, you don't set this** — Vercel injects an internal endpoint at runtime that points to its observability bridge.
+- Vercel involvement: 100%. The Vercel observability bridge ingests the spans, and *if* you've installed the [Datadog Vercel integration](https://vercel.com/integrations/datadog), Vercel forwards them to Datadog APM. Without the integration, the spans accumulate in Vercel's "Logs" / "Observability" tab but never reach Datadog.
+
+**Why this matters in practice:**
+
+- If RUM events are missing in Datadog → check the four `NEXT_PUBLIC_DATADOG_*` env vars and the browser console for `[Datadog]` warnings. Vercel can't be the cause; the request never goes through Vercel.
+- If APM spans are missing → the most common cause is the Datadog Vercel integration not being installed (or being installed on a different team / project). RUM still works fine in that scenario, which is what makes this confusing — you'll see XHRs in RUM with `@_dd.trace_id` populated, but clicking "View APM Trace" 404s.
+- If RUM and APM both work but aren't joined → `traceparent` was either dropped (CORS preflight stripping headers, or a corporate proxy) or your Datadog APM service is on a sampling rule that drops the parent span. Check `@_dd.trace_id` on both sides — they must be byte-equal.
+
+### 7.5 What you actually see in Datadog
+
+Once both pipelines deliver their data, Datadog joins them in the UI:
+
+1. **RUM Explorer → Sessions → click a session.** You see the user's view sequence with actions and resource events overlaid on a timeline.
+2. **Click a `resource` event** (a fetch/XHR). The right-hand panel shows `@_dd.trace_id` and a **"View APM Trace"** button.
+3. **The APM trace view** shows the full server-side span tree: the Next.js function span at the root, the outbound fetch span as a child, the Flask span as a grandchild, and any further sub-spans (DB queries, AI SDK tool calls, etc.).
+4. **Logs in the trace timeline.** Any `submitLog()` call from §4 with a matching `dd.trace_id` (which `@vercel/otel` populates on `console.log`/structured logs automatically when an active span exists) appears inline as a "log" row in the APM trace view.
+
+That last bit — logs joined to traces — is why §4's `submitLog()` doesn't have to manually pass `trace_id`. As long as the log is emitted from inside an active OTel span context (which is true for any code path under a route handler when `@vercel/otel` is registered), Datadog's correlation logic does the join for you.
+
+---
+
+## 8. End-to-end request example
 
 Here's what an instrumented "user sends a chat message" looks like:
 
@@ -646,7 +795,7 @@ Here's what an instrumented "user sends a chat message" looks like:
 
 ---
 
-## 8. Pitfalls and gotchas
+## 9. Pitfalls and gotchas
 
 1. **Edge runtime** — `@vercel/otel` v2 supports both Node and Edge, but `@datadog/datadog-api-client` is **Node-only**. Don't import `lib/DDLogSubmission.ts` from a route or middleware that opts into the edge runtime (`export const runtime = "edge"`). Use OTel events for edge work.
 2. **`maxDuration` and async logging** — Vercel Functions terminate at `maxDuration`. A `void submitLog(...)` started just before the return *may* be cut off. For critical events use `after()` from `next/server` to extend execution past response close.
@@ -659,7 +808,7 @@ Here's what an instrumented "user sends a chat message" looks like:
 
 ---
 
-## 9. Lift-and-shift checklist for a new Next.js app
+## 10. Lift-and-shift checklist for a new Next.js app
 
 Follow these in order. Estimated total time: **30 min** for a fresh project.
 
@@ -774,7 +923,7 @@ If any of these are missing, check the browser console for `[Datadog]` warnings 
 
 ---
 
-## 10. Reference files (in this repo)
+## 11. Reference files (in this repo)
 
 | File | Role |
 |---|---|
@@ -793,7 +942,7 @@ If any of these are missing, check the browser console for `[Datadog]` warnings 
 
 ---
 
-## 11. Further reading
+## 12. Further reading
 
 - [`@vercel/otel` docs](https://vercel.com/docs/observability/otel-overview) — runtime detection, env vars, exporter behavior on Vercel.
 - [Datadog RUM Browser SDK](https://docs.datadoghq.com/real_user_monitoring/browser/) — every init option, including the `beforeSend` hook for last-mile redaction.
