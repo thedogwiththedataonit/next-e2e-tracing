@@ -1,10 +1,27 @@
-# Flask API GitHub repository URL
-# Replace this with your actual Flask API repository URL
+# --- Vercel Sandbox -----------------------------------------------------------
+
+# Flask API GitHub repository URL (cloned into the sandbox on init)
 FLASK_API_GITHUB_REPO=https://github.com/your-username/your-flask-api-repo.git
 
-# Datadog API Key
-# Get this from your Datadog account settings
+# Vercel OIDC token will be automatically populated when you run 'vercel env pull'.
+# Required for `@vercel/sandbox` authentication.
+# VERCEL_OIDC_TOKEN=<auto-populated>
+
+# --- Datadog: server (Node.js) ------------------------------------------------
+
+# Datadog API key — used by `lib/DDLogSubmission.ts` to ship structured server
+# logs and by /api/sandbox-init to install/configure the Datadog agent inside
+# the Vercel Sandbox so Flask APM traces flow into Datadog. Server-only.
 DD_API_KEY=your-datadog-api-key-here
 
-# Vercel OIDC token will be automatically populated when you run 'vercel env pull'
-# This is needed for Vercel Sandbox authentication
+# Optional. Defaults to "datadoghq.com" if unset.
+# DATADOG_SITE=datadoghq.com
+
+# --- Datadog: browser RUM -----------------------------------------------------
+# These four are inlined into the client bundle. Never put a secret in
+# NEXT_PUBLIC_* — only the public RUM application id and client token belong here.
+
+NEXT_PUBLIC_DATADOG_APPLICATION_ID=your-rum-application-id
+NEXT_PUBLIC_DATADOG_CLIENT_TOKEN=your-rum-client-token
+NEXT_PUBLIC_DATADOG_SERVICE_NAME=next-app
+NEXT_PUBLIC_DATADOG_ENV=dev

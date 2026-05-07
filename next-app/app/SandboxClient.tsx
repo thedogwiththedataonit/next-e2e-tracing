@@ -6,7 +6,7 @@ export default function SandboxClient() {
   const [isInitializing, setIsInitializing] = useState(false);
   const [isFetchingData, setIsFetchingData] = useState(false);
   const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
-  const [apiData, setApiData] = useState<any>(null);
+  const [apiData, setApiData] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [callCount, setCallCount] = useState(0);
 
